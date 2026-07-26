@@ -1,3 +1,18 @@
+import os
+
+from dotenv import load_dotenv
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda
+from langchain_postgres import PGVector
+
+from providers import get_embeddings, get_llm
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+PG_VECTOR_COLLECTION_NAME = os.getenv("PG_VECTOR_COLLECTION_NAME")
+
 PROMPT_TEMPLATE = """
 CONTEXTO:
 {contexto}
@@ -25,5 +40,24 @@ PERGUNTA DO USUÁRIO:
 RESPONDA A "PERGUNTA DO USUÁRIO"
 """
 
-def search_prompt(question=None):
-    pass
+
+def search_prompt():
+    if not DATABASE_URL or not PG_VECTOR_COLLECTION_NAME:
+        return None
+
+    store = PGVector(
+        embeddings=get_embeddings(),
+        collection_name=PG_VECTOR_COLLECTION_NAME,
+        connection=DATABASE_URL,
+        use_jsonb=True,
+    )
+
+    def retrieve(pergunta: str) -> dict:
+        resultados = store.similarity_search_with_score(pergunta, k=10)
+        contexto = "\n\n".join(doc.page_content for doc, _score in resultados)
+        return {"contexto": contexto, "pergunta": pergunta}
+
+    prompt = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
+    llm = get_llm()
+
+    return RunnableLambda(retrieve) | prompt | llm | StrOutputParser()
